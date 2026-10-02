@@ -43,11 +43,17 @@ class ResourceExecutor:
             raise ValueError("plan already active")
         plan.validate(self.capacities)
         for activity in plan.activities:
-            if activity.memory_reads or activity.memory_writes:
+            if (
+                activity.memory_reads
+                or activity.memory_writes
+                or activity.memory_releases
+            ):
                 if self.memory_manager is None:
                     raise ValueError("memory accesses require native memory pools")
                 self.memory_manager.validate_accesses(
-                    activity.memory_reads, activity.memory_writes
+                    activity.memory_reads,
+                    activity.memory_writes,
+                    activity.memory_releases,
                 )
         self.plans[key] = PlanState(plan, time)
 
@@ -64,7 +70,9 @@ class ResourceExecutor:
                 if any(self.used[r] >= self.capacities[r] for r in activity.resources):
                     continue
                 if self.memory_manager is not None and not self.memory_manager.ready(
-                    activity.memory_reads, activity.memory_writes
+                    activity.memory_reads,
+                    activity.memory_writes,
+                    activity.memory_releases,
                 ):
                     continue
                 finish = time + activity.duration_seconds
@@ -72,7 +80,9 @@ class ResourceExecutor:
                     raise ValueError("activity completion time overflow")
                 if self.memory_manager is not None:
                     self.memory_manager.begin(
-                        activity.memory_reads, activity.memory_writes
+                        activity.memory_reads,
+                        activity.memory_writes,
+                        activity.memory_releases,
                     )
                 state.started.add(activity.name)
                 for resource in activity.resources:
@@ -87,7 +97,9 @@ class ResourceExecutor:
         if time != finish:
             raise ValueError("activity completed at an unexpected time")
         if self.memory_manager is not None:
-            self.memory_manager.complete(activity.memory_reads, activity.memory_writes)
+            self.memory_manager.complete(
+                activity.memory_reads, activity.memory_writes, activity.memory_releases
+            )
         del self.running[key, name]
         for resource in activity.resources:
             self.used[resource] -= 1

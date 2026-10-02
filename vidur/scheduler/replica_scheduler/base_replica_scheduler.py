@@ -43,6 +43,9 @@ class BaseReplicaScheduler(ABC):
         self._execution_time_predictor = execution_time_predictor
         self._memory_manager = None
         self._memory_requirements = {}
+        self._dynamic_memory = False
+        self._memory_evictions = 0
+        self._memory_recovery = False
         self._resource_executor = None
         if execution_time_predictor.uses_execution_plans:
             from vidur.scheduler.memory_pool_manager import MemoryPoolManager
@@ -119,7 +122,10 @@ class BaseReplicaScheduler(ABC):
             return None
         manager = self._memory_manager
         return {
-            "policy": "full_request_reservation",
+            "policy": "step_growth"
+            if self._dynamic_memory
+            else "full_request_reservation",
+            "preemptions": self._memory_evictions,
             "units": "bytes",
             "capacity": dict(manager.capacities),
             "used": dict(manager.used),
@@ -157,16 +163,51 @@ class BaseReplicaScheduler(ABC):
             self._memory_requirements[request.id] = requirements
         self._request_queue.append(request)
 
-    def _can_reserve_native_memory(self, request):
-        return self._memory_manager is None or self._memory_manager.can_reserve(
-            request.id, self._memory_requirements[request.id]
+    def _native_memory_demand(self, request, next_num_tokens):
+        bounds = self._memory_requirements[request.id]
+        demand = self._execution_time_predictor.request_step_memory_requirements(
+            request, next_num_tokens
+        )
+        if demand is None:
+            return bounds
+        self._dynamic_memory = True
+        demand = dict(demand)
+        self._memory_manager.validate_requirements(demand)
+        if (
+            not demand
+            or not any(demand.values())
+            or any(p not in bounds or n > bounds[p] for p, n in demand.items())
+        ):
+            raise ValueError(
+                "step memory demand must be nonzero and within declared bounds"
+            )
+        return demand
+
+    def _can_reserve_native_memory(self, request, next_num_tokens):
+        return self._memory_manager is None or self._memory_manager.can_grow(
+            request.id, self._native_memory_demand(request, next_num_tokens)
         )
 
-    def _reserve_native_memory(self, request):
+    def _reserve_native_memory(self, request, next_num_tokens):
         if self._memory_manager is not None:
-            self._memory_manager.reserve(
-                request.id, self._memory_requirements[request.id]
+            self._memory_manager.grow(
+                request.id, self._native_memory_demand(request, next_num_tokens)
             )
+
+    def _preempt_request(self, request):
+        # Only callers holding an idle request may discard its resident KV.
+        self.free(request.id)
+        request.restart()
+        self._memory_evictions += 1
+        self._memory_recovery = self._memory_manager is not None
+        self._request_queue.insert(0, request)
+
+    def _native_recovery_blocks_admission(self):
+        # Drain resident survivors before replaying evicted work. Without this
+        # barrier, small prefill chunks can repeatedly evict each other.
+        if not self._allocation_map:
+            self._memory_recovery = False
+        return self._memory_recovery
 
     def get_replica_stage_scheduler(self, stage_id: int):
         return self._replica_stage_schedulers[stage_id]
@@ -206,9 +247,13 @@ class BaseReplicaScheduler(ABC):
     def on_schedule(self) -> list[Batch]:
         scheduled_batches = []
         while self._num_running_batches < self._max_inflight_batches:
+            evictions = self._memory_evictions
             batch = self._get_next_batch()
             if not batch:
-                break
+                if self._memory_evictions > evictions and not self._num_running_batches:
+                    batch = self._get_next_batch()
+                if not batch:
+                    break
             scheduled_batches.append(batch)
             self._num_running_batches += 1
         return scheduled_batches

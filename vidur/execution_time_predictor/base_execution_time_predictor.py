@@ -42,6 +42,14 @@ class BaseExecutionTimePredictor(ABC):
         """Return usable replica-wide byte capacities; empty disables pool admission."""
         return {}
 
+    def request_step_memory_requirements(self, request, next_num_tokens):
+        """Optional minimum bytes for this scheduled step; None uses fixed bounds.
+
+        Declare demand only. Native admission owns allocation and preemption.
+        Do not use realized future output length to determine incremental demand.
+        """
+        return
+
     def request_memory_requirements(self, request):
         """Declare a stable maximum byte footprint per pool; do not allocate here."""
         return {}

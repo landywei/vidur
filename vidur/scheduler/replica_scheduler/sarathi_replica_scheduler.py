@@ -23,8 +23,8 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
             self._config.watermark_blocks_fraction * self._config.num_blocks
         )
 
-    def _can_allocate_request(self, request: Request) -> bool:
-        if not self._can_reserve_native_memory(request):
+    def _can_allocate_request(self, request: Request, next_num_tokens: int) -> bool:
+        if not self._can_reserve_native_memory(request, next_num_tokens):
             return False
         if request.id not in self._allocation_map:
             # new request
@@ -41,8 +41,8 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
         # vllm requires at least one block to be available
         return self._config.num_blocks - self._num_allocated_blocks >= 1
 
-    def _allocate_request(self, request: Request) -> None:
-        self._reserve_native_memory(request)
+    def _allocate_request(self, request: Request, next_num_tokens: int) -> None:
+        self._reserve_native_memory(request, next_num_tokens)
         if request.id not in self._allocation_map:
             # new request
             num_required_blocks = ceil(
@@ -118,19 +118,15 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
                 skipped_requests.append(request)
                 continue
 
-            while not self._can_allocate_request(request):
+            while not self._can_allocate_request(request, next_num_tokens):
                 if self._preempted_requests:
                     victim_request = self._preempted_requests.pop(-1)
-                    victim_request.restart()
-                    self.free(victim_request.id)
-                    self._request_queue = [victim_request] + self._request_queue
+                    self._preempt_request(victim_request)
                 else:
-                    request.restart()
-                    self.free(request.id)
-                    self._request_queue = [request] + self._request_queue
+                    self._preempt_request(request)
                     break
             else:
-                self._allocate_request(request)
+                self._allocate_request(request, next_num_tokens)
                 assert request.is_prefill_complete
                 num_batch_tokens += next_num_tokens
                 requests.append(request)
@@ -147,6 +143,10 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
                 skipped_requests.append(request)
                 continue
 
+            if not self._can_reserve_native_memory(request, next_num_tokens):
+                self._preempt_request(request)
+                continue
+            self._reserve_native_memory(request, next_num_tokens)
             contains_prefill = True
             num_batch_tokens += next_num_tokens
             requests.append(request)
@@ -161,13 +161,12 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
         skipped_requests = []
 
         while self._request_queue:
+            if self._native_recovery_blocks_admission():
+                break
             if len(self._allocation_map) == self._config.batch_size_cap:
                 break
 
             if len(requests) == self._max_micro_batch_size:
-                break
-
-            if not self._can_allocate_request(self._request_queue[0]):
                 break
 
             next_num_tokens = self._get_request_next_num_tokens(
@@ -177,9 +176,12 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
             if next_num_tokens == 0:
                 break
 
+            if not self._can_allocate_request(self._request_queue[0], next_num_tokens):
+                break
+
             request = self._request_queue.pop(0)
 
-            self._allocate_request(request)
+            self._allocate_request(request, next_num_tokens)
 
             # all new requests will have a prefill
             contains_prefill = True

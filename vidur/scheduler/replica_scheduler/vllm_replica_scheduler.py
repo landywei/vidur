@@ -32,8 +32,8 @@ class VLLMReplicaScheduler(BaseReplicaScheduler):
             else:
                 self._preempted_requests.append(request)
 
-    def _can_allocate_request(self, request: Request) -> bool:
-        if not self._can_reserve_native_memory(request):
+    def _can_allocate_request(self, request: Request, next_num_tokens: int) -> bool:
+        if not self._can_reserve_native_memory(request, next_num_tokens):
             return False
         if request.id not in self._allocation_map:
             # new request
@@ -50,8 +50,8 @@ class VLLMReplicaScheduler(BaseReplicaScheduler):
         # vllm requires at least one block to be available
         return self._config.num_blocks - self._num_allocated_blocks >= 1
 
-    def _allocate_request(self, request: Request) -> None:
-        self._reserve_native_memory(request)
+    def _allocate_request(self, request: Request, next_num_tokens: int) -> None:
+        self._reserve_native_memory(request, next_num_tokens)
         if request.id not in self._allocation_map:
             # new request
             num_required_blocks = ceil(
@@ -77,11 +77,13 @@ class VLLMReplicaScheduler(BaseReplicaScheduler):
         num_batch_tokens = 0
 
         while self._request_queue:
+            if self._native_recovery_blocks_admission():
+                break
             request = self._request_queue[0]
 
             next_num_tokens = self._get_request_next_num_tokens(request)
 
-            if not self._can_allocate_request(request):
+            if not self._can_allocate_request(request, next_num_tokens):
                 break
 
             new_num_tokens = num_tokens + [next_num_tokens]
@@ -97,7 +99,7 @@ class VLLMReplicaScheduler(BaseReplicaScheduler):
 
             request = self._request_queue.pop(0)
 
-            self._allocate_request(request)
+            self._allocate_request(request, next_num_tokens)
             requests.append(request)
             num_tokens.append(next_num_tokens)
             num_batch_tokens += next_num_tokens
@@ -113,20 +115,17 @@ class VLLMReplicaScheduler(BaseReplicaScheduler):
                 break
 
             request = self._preempted_requests.pop(0)
+            next_num_tokens = self._get_request_next_num_tokens(request)
 
-            while not self._can_allocate_request(request):
+            while not self._can_allocate_request(request, next_num_tokens):
                 if self._preempted_requests:
                     victim_request = self._preempted_requests.pop(-1)
-                    victim_request.restart()
-                    self.free(victim_request.id)
-                    self._request_queue = [victim_request] + self._request_queue
+                    self._preempt_request(victim_request)
                 else:
-                    request.restart()
-                    self.free(request.id)
-                    self._request_queue = [request] + self._request_queue
+                    self._preempt_request(request)
                     break
             else:
-                self._allocate_request(request)
+                self._allocate_request(request, next_num_tokens)
                 next_num_tokens = self._get_request_next_num_tokens(request)
                 requests.append(request)
                 num_tokens.append(next_num_tokens)

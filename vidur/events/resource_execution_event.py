@@ -13,7 +13,9 @@ def submit_native_batches(time, replica_id, stage_id, stage):
         for activity in plan.activities:
             if any(
                 access.request_id not in batch.request_ids
-                for access in activity.memory_reads + activity.memory_writes
+                for access in activity.memory_reads
+                + activity.memory_writes
+                + activity.memory_releases
             ):
                 raise ValueError(
                     "activity memory access references a request outside its batch"
@@ -81,7 +83,12 @@ class ResourceActivityEndEvent(BaseEvent):
     def handle_event(self, scheduler, metrics_store):
         executor = scheduler.get_replica_scheduler(self.replica_id)._resource_executor
         executor.complete(self.key, self.activity.name, self.time)
-        return [ResourceDispatchEvent(self.time, self.replica_id)]
+        events = [ResourceDispatchEvent(self.time, self.replica_id)]
+        if self.activity.memory_releases:
+            from vidur.events.replica_schedule_event import ReplicaScheduleEvent
+
+            events.append(ReplicaScheduleEvent(self.time, self.replica_id))
+        return events
 
     def to_dict(self):
         return {
@@ -96,6 +103,9 @@ class ResourceActivityEndEvent(BaseEvent):
             "dependencies": list(self.activity.dependencies),
             "memory_reads": [vars(access) for access in self.activity.memory_reads],
             "memory_writes": [vars(access) for access in self.activity.memory_writes],
+            "memory_releases": [
+                vars(access) for access in self.activity.memory_releases
+            ],
         }
 
     def to_chrome_trace(self):

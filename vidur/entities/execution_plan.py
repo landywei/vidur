@@ -38,6 +38,7 @@ class ExecutionActivity:
     dependencies: tuple[str, ...] = ()
     memory_reads: tuple[MemoryAccess, ...] = ()
     memory_writes: tuple[MemoryAccess, ...] = ()
+    memory_releases: tuple[MemoryAccess, ...] = ()
 
 
 @dataclass(frozen=True)

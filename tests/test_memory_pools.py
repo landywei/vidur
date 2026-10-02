@@ -93,3 +93,46 @@ class MemoryPoolTests(unittest.TestCase):
         for access in (M(1, "a", 1), M(0, "a", 9)):
             with self.assertRaises(ValueError):
                 pools.validate_accesses((access,), ())
+
+    def test_growth_is_atomic_and_keeps_valid_prefix(self):
+        pools = MemoryPoolManager({"a": 16, "b": 16})
+        pools.grow(0, {"a": 8, "b": 8})
+        pools.begin((), (M(0, "a", 8),))
+        pools.complete((), (M(0, "a", 8),))
+        pools.grow(1, {"b": 8})
+        with self.assertRaises(ValueError):
+            pools.grow(0, {"a": 16, "b": 16})
+        self.assertEqual(pools.used, {"a": 8, "b": 16})
+        pools.grow(0, {"a": 16})
+        self.assertEqual(pools.resident[0, "a"], 8)
+        self.assertFalse(pools.ready((M(0, "a", 16),), ()))
+
+    def test_migration_waits_for_readers_then_reclaims_only_at_completion(self):
+        pools = MemoryPoolManager({"a": 8, "b": 8})
+        pools.grow(0, {"a": 8, "b": 8})
+        source, target = (M(0, "a", 8),), (M(0, "b", 8),)
+        pools.begin((), source)
+        pools.complete((), source)
+        pools.begin(source, ())
+        self.assertFalse(pools.ready(source, target, source))
+        pools.complete(source, ())
+        pools.begin(source, target, source)
+        self.assertFalse(pools.ready(source, ()))
+        self.assertEqual(pools.used["a"], 8)
+        pools.complete(source, target, source)
+        self.assertEqual(pools.used, {"a": 0, "b": 8})
+        self.assertTrue(pools.ready(target, ()))
+        pools.grow(1, {"a": 8})
+        with self.assertRaises(ValueError):
+            pools.validate_accesses(source, ())
+        pools.free(0)
+        pools.free(1)
+        self.assertEqual(pools.used, {"a": 0, "b": 0})
+
+    def test_release_rejects_partial_or_unread_source(self):
+        pools = MemoryPoolManager({"a": 16})
+        pools.grow(0, {"a": 16})
+        with self.assertRaises(ValueError):
+            pools.validate_accesses((M(0, "a", 8),), (), (M(0, "a", 8),))
+        with self.assertRaises(ValueError):
+            pools.validate_accesses((), (), (M(0, "a", 16),))

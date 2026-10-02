@@ -2,7 +2,8 @@
 
 Admission reserves a request's declared maximum footprint atomically across
 pools. Residency becomes visible only when a writing activity completes.
-This conservative policy does not implement paging, dynamic growth or eviction.
+Step admission can atomically grow allocations. Explicit activity releases
+reclaim source pools at completion; scheduler preemption discards whole requests.
 """
 
 
@@ -53,6 +54,26 @@ class MemoryPoolManager:
             self.peak_used[pool] = max(self.peak_used[pool], self.used[pool])
             self.resident[request_id, pool] = 0
 
+    def can_grow(self, request_id, requirements):
+        """Check incremental demand without shrinking existing allocations."""
+        self.validate_requirements(requirements)
+        current = self.reservations.get(request_id, {})
+        return all(
+            self.used[p] + max(0, n - current.get(p, 0)) <= self.capacities[p]
+            for p, n in requirements.items()
+        )
+
+    def grow(self, request_id, requirements):
+        if not self.can_grow(request_id, requirements):
+            raise ValueError("insufficient memory pool capacity")
+        current = self.reservations.setdefault(request_id, {})
+        for pool, size in requirements.items():
+            previous = current.get(pool, 0)
+            current[pool] = max(previous, size)
+            self.used[pool] += max(0, size - previous)
+            self.peak_used[pool] = max(self.peak_used[pool], self.used[pool])
+            self.resident.setdefault((request_id, pool), 0)
+
     def free(self, request_id):
         pools = self.reservations[request_id]
         if any(
@@ -65,8 +86,8 @@ class MemoryPoolManager:
             self.resident.pop((request_id, pool))
         del self.reservations[request_id]
 
-    def validate_accesses(self, reads, writes):
-        for accesses in (reads, writes):
+    def validate_accesses(self, reads, writes, releases=()):
+        for accesses in (reads, writes, releases):
             seen = set()
             for access in accesses:
                 key = (access.request_id, access.pool)
@@ -82,28 +103,37 @@ class MemoryPoolManager:
                 ):
                     raise ValueError("memory access exceeds a request's reserved bytes")
 
-    def ready(self, reads, writes):
-        self.validate_accesses(reads, writes)
+        for access in releases:
+            key = (access.request_id, access.pool)
+            if access not in reads or any(
+                (w.request_id, w.pool) == key for w in writes
+            ):
+                raise ValueError("release requires a matching read and no source write")
+            if self.reservations[access.request_id][access.pool] != access.bytes:
+                raise ValueError("release must cover the whole pool allocation")
+
+    def ready(self, reads, writes, releases=()):
+        self.validate_accesses(reads, writes, releases)
         for access in reads:
             key = (access.request_id, access.pool)
             if key in self.writers or self.resident[key] < access.bytes:
                 return False
-        for access in writes:
+        for access in writes + releases:
             key = (access.request_id, access.pool)
             if key in self.writers or self.readers.get(key, 0):
                 return False
         return True
 
-    def begin(self, reads, writes):
-        if not self.ready(reads, writes):
+    def begin(self, reads, writes, releases=()):
+        if not self.ready(reads, writes, releases):
             raise ValueError("memory activity is not ready")
         for access in reads:
             key = (access.request_id, access.pool)
             self.readers[key] = self.readers.get(key, 0) + 1
-        for access in writes:
+        for access in writes + releases:
             self.writers.add((access.request_id, access.pool))
 
-    def complete(self, reads, writes):
+    def complete(self, reads, writes, releases=()):
         for access in reads:
             key = (access.request_id, access.pool)
             self.readers[key] -= 1
@@ -113,3 +143,10 @@ class MemoryPoolManager:
             key = (access.request_id, access.pool)
             self.writers.remove(key)
             self.resident[key] = max(self.resident[key], access.bytes)
+        for access in releases:
+            key = (access.request_id, access.pool)
+            self.writers.remove(key)
+            self.used[access.pool] -= self.reservations[access.request_id].pop(
+                access.pool
+            )
+            del self.resident[key]
