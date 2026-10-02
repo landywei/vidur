@@ -11,12 +11,15 @@ class ReplicaStageScheduler:
         stage_id: int,
         is_last_stage: bool,
         execution_time_predictor: BaseExecutionTimePredictor,
+        resource_executor=None,
     ) -> None:
         self._replica_id = replica_id
         self._stage_id = stage_id
         self._is_last_stage = is_last_stage
         self._execution_time_predictor = execution_time_predictor
 
+        self.resource_executor = resource_executor
+        self.native_batches = {}
         self._batch_queue = []
         self._is_busy = False
 
@@ -25,7 +28,7 @@ class ReplicaStageScheduler:
         return self._is_last_stage
 
     def is_empty(self) -> bool:
-        return len(self._batch_queue) == 0
+        return len(self._batch_queue) == 0 and not self.native_batches and not self._is_busy
 
     def add_batch(self, batch: Batch) -> None:
         self._batch_queue.append(batch)

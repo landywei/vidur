@@ -29,6 +29,13 @@ class ReplicaStageScheduleEvent(BaseEvent):
             self._replica_id
         ]._replica_stage_schedulers[self._stage_id]
 
+        if stage_scheduler.resource_executor is not None:
+            from vidur.events.resource_execution_event import submit_native_batches
+
+            return submit_native_batches(
+                self.time, self._replica_id, self._stage_id, stage_scheduler
+            )
+
         self._batch, self._batch_stage, execution_time = stage_scheduler.on_schedule()
 
         if not (self._batch and self._batch_stage):

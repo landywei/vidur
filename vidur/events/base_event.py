@@ -30,7 +30,7 @@ class BaseEvent(ABC):
 
     @property
     def event_type(self):
-        pass
+        return self._event_type
 
     @abstractmethod
     def handle_event(
@@ -42,7 +42,7 @@ class BaseEvent(ABC):
         pass
 
     def _get_priority_number(self):
-        return (self._time, self._id, self.event_type)
+        return (self._time, self.event_type, self._id)
 
     def __lt__(self, other):
         if self._time == other._time:

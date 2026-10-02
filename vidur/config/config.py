@@ -254,6 +254,14 @@ class TraceRequestGeneratorConfig(BaseRequestGeneratorConfig):
 
 @dataclass
 class BaseReplicaSchedulerConfig(BasePolyConfig):
+    max_inflight_batches: Optional[int] = field(
+        default=None,
+        metadata={"help": "Native execution admission limit; default is pipeline depth."},
+    )
+    micro_batch_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Native execution per-batch request cap; independent of pipeline depth."},
+    )
     batch_size_cap: int = field(
         default=128,
         metadata={"help": "Maximum batch size cap."},

@@ -42,12 +42,13 @@ class BatchStageEndEvent(BaseEvent):
         ).on_stage_end()
 
         self._batch_stage.on_stage_end(self.time)
-        metrics_store.on_batch_stage_end(
-            self._batch_stage,
-            self.time,
-            self._replica_id,
-            self._stage_id,
-        )
+        if not self._batch_stage._native:
+            metrics_store.on_batch_stage_end(
+                self._batch_stage,
+                self.time,
+                self._replica_id,
+                self._stage_id,
+            )
 
         next_events = [
             ReplicaStageScheduleEvent(

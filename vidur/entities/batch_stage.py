@@ -38,6 +38,7 @@ class BatchStage(BaseEntity):
         self._execution_time = execution_time
         self._model_execution_time = model_execution_time
 
+        self._native = execution_time is None
         self._scheduled_at = None
         self._completed_at = None
         self._scheduled = False
@@ -94,8 +95,11 @@ class BatchStage(BaseEntity):
         self,
         time: float,
     ) -> None:
+        if self._native:
+            self._execution_time = time - self._scheduled_at
+            self._model_execution_time = self._execution_time
         assert (
-            time == self._scheduled_at + self._execution_time
+            self._native or time == self._scheduled_at + self._execution_time
         ), f"{time} != {self._scheduled_at} + {self._execution_time}"
 
         self._completed_at = time

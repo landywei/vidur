@@ -30,6 +30,29 @@ class BaseReplicaScheduler(ABC):
         self._request_generator_config = request_generator_config
         self._replica_id = replica.id
         self._num_stages = num_stages
+        self._max_inflight_batches = self._config.max_inflight_batches
+        if self._max_inflight_batches is None:
+            self._max_inflight_batches = num_stages
+        for value in (self._max_inflight_batches, self._config.micro_batch_size):
+            if value is not None and (type(value) is not int or value < 1):
+                raise ValueError("native batch limits must be positive integers")
+        if (
+            self._config.micro_batch_size is not None
+            and self._config.micro_batch_size > self._config.batch_size_cap
+        ):
+            raise ValueError("micro batch size exceeds resident request cap")
+        self._resource_executor = None
+        if execution_time_predictor.uses_execution_plans:
+            from vidur.scheduler.resource_executor import ResourceExecutor
+
+            self._resource_executor = ResourceExecutor(
+                execution_time_predictor.resource_capacities()
+            )
+        elif (
+            self._config.max_inflight_batches is not None
+            or self._config.micro_batch_size is not None
+        ):
+            raise ValueError("native batch limits require an execution-plan predictor")
 
         self._max_blocks_per_sequence = (
             self._request_generator_config.max_tokens // self._config.block_size
@@ -60,6 +83,7 @@ class BaseReplicaScheduler(ABC):
                 stage_id,
                 stage_id == num_stages - 1,
                 execution_time_predictor,
+                self._resource_executor,
             )
             for stage_id in range(num_stages)
         }
@@ -136,7 +160,7 @@ class BaseReplicaScheduler(ABC):
 
     def on_schedule(self) -> List[Batch]:
         scheduled_batches = []
-        while self._num_running_batches < self._num_stages:
+        while self._num_running_batches < self._max_inflight_batches:
             batch = self._get_next_batch()
             if not batch:
                 break

@@ -15,7 +15,7 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
         self._preempted_requests = []
         # For vLLM and its derivatives, we only need to set a loose max batch size
         # Memory requirements are handled explicitly by the scheduler
-        self._max_micro_batch_size = self._config.batch_size_cap // self._num_stages
+        self._max_micro_batch_size = self._config.micro_batch_size or self._config.batch_size_cap // self._num_stages
         self._watermark_blocks = int(
             self._config.watermark_blocks_fraction * self._config.num_blocks
         )

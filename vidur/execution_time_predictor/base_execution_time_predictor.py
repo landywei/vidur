@@ -29,6 +29,15 @@ class BaseExecutionTimePredictor(ABC):
             self._model_config.num_layers // self._replica_config.num_pipeline_stages
         )
 
+    # Opt-in: native predictors return activities instead of legacy slot totals.
+    uses_execution_plans = False
+
+    def resource_capacities(self):
+        raise NotImplementedError
+
+    def get_execution_plan(self, batch, pipeline_stage):
+        raise NotImplementedError
+
     def get_execution_time(self, batch: Batch, pipeline_stage: int) -> ExecutionTime:
         if pipeline_stage == self._replica_config.num_pipeline_stages - 1:
             pipeline_parallel_communication_time = 0
