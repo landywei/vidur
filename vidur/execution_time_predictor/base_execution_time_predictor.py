@@ -38,6 +38,14 @@ class BaseExecutionTimePredictor(ABC):
     def get_execution_plan(self, batch, pipeline_stage):
         raise NotImplementedError
 
+    def memory_pool_capacities(self):
+        """Return usable replica-wide byte capacities; empty disables pool admission."""
+        return {}
+
+    def request_memory_requirements(self, request):
+        """Declare a stable maximum byte footprint per pool; do not allocate here."""
+        return {}
+
     def get_execution_time(self, batch: Batch, pipeline_stage: int) -> ExecutionTime:
         if pipeline_stage == self._replica_config.num_pipeline_stages - 1:
             pipeline_parallel_communication_time = 0

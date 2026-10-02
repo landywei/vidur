@@ -1,7 +1,6 @@
 import atexit
 import heapq
 import json
-from typing import List
 
 from vidur.config import SimulationConfig
 from vidur.entities import Cluster
@@ -75,7 +74,11 @@ class Simulator:
                 if chrome_trace:
                     self._event_chrome_trace.append(chrome_trace)
 
-        assert self._scheduler.is_empty() or self._terminate
+        if not self._scheduler.is_empty() and not self._terminate:
+            raise RuntimeError(
+                "simulation has unfinished requests with no events; check admission "
+                "capacity, execution dependencies and memory residency"
+            )
 
         logger.info(f"Simulation ended at: {self._time}s")
 
@@ -96,7 +99,7 @@ class Simulator:
     def _add_event(self, event: BaseEvent) -> None:
         heapq.heappush(self._event_queue, (event._priority_number, event))
 
-    def _add_events(self, events: List[BaseEvent]) -> None:
+    def _add_events(self, events: list[BaseEvent]) -> None:
         for event in events:
             self._add_event(event)
 

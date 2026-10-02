@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import List
 
 from vidur.config import (
     BaseReplicaSchedulerConfig,
@@ -41,12 +40,23 @@ class BaseReplicaScheduler(ABC):
             and self._config.micro_batch_size > self._config.batch_size_cap
         ):
             raise ValueError("micro batch size exceeds resident request cap")
+        self._execution_time_predictor = execution_time_predictor
+        self._memory_manager = None
+        self._memory_requirements = {}
         self._resource_executor = None
         if execution_time_predictor.uses_execution_plans:
+            from vidur.scheduler.memory_pool_manager import MemoryPoolManager
             from vidur.scheduler.resource_executor import ResourceExecutor
 
+            capacities = execution_time_predictor.memory_pool_capacities()
+            if capacities:
+                if str(self._config.get_type()) not in {"vllm", "sarathi"}:
+                    raise ValueError(
+                        "native memory admission supports vllm and sarathi only"
+                    )
+                self._memory_manager = MemoryPoolManager(capacities)
             self._resource_executor = ResourceExecutor(
-                execution_time_predictor.resource_capacities()
+                execution_time_predictor.resource_capacities(), self._memory_manager
             )
         elif (
             self._config.max_inflight_batches is not None
@@ -104,6 +114,20 @@ class BaseReplicaScheduler(ABC):
     def memory_usage_percent(self) -> int:
         return (self._num_allocated_blocks * 100) / self._config.num_blocks
 
+    def memory_pool_stats(self):
+        if self._memory_manager is None:
+            return None
+        manager = self._memory_manager
+        return {
+            "policy": "full_request_reservation",
+            "units": "bytes",
+            "capacity": dict(manager.capacities),
+            "used": dict(manager.used),
+            "peak_used": dict(manager.peak_used),
+            "resident_bytes": sum(manager.resident.values()),
+            "reserved_requests": len(manager.reservations),
+        }
+
     def is_empty(self) -> bool:
         return (
             self.num_pending_requests == 0
@@ -123,7 +147,26 @@ class BaseReplicaScheduler(ABC):
         return request.num_prefill_tokens
 
     def add_request(self, request: Request) -> None:
+        if self._memory_manager is not None:
+            requirements = dict(
+                self._execution_time_predictor.request_memory_requirements(request)
+            )
+            self._memory_manager.validate_requirements(requirements)
+            if not requirements or not any(requirements.values()):
+                raise ValueError("pool-aware requests must declare a nonzero footprint")
+            self._memory_requirements[request.id] = requirements
         self._request_queue.append(request)
+
+    def _can_reserve_native_memory(self, request):
+        return self._memory_manager is None or self._memory_manager.can_reserve(
+            request.id, self._memory_requirements[request.id]
+        )
+
+    def _reserve_native_memory(self, request):
+        if self._memory_manager is not None:
+            self._memory_manager.reserve(
+                request.id, self._memory_requirements[request.id]
+            )
 
     def get_replica_stage_scheduler(self, stage_id: int):
         return self._replica_stage_schedulers[stage_id]
@@ -140,8 +183,10 @@ class BaseReplicaScheduler(ABC):
 
         assert self._num_allocated_blocks <= self._config.num_blocks
 
-    def free(self, *request_ids: List[int]) -> None:
+    def free(self, *request_ids: int) -> None:
         for request_id in request_ids:
+            if self._memory_manager is not None:
+                self._memory_manager.free(request_id)
             num_blocks = self._allocation_map.pop(request_id)
             self._num_allocated_blocks -= num_blocks
 
@@ -158,7 +203,7 @@ class BaseReplicaScheduler(ABC):
     def _get_next_batch(self) -> Batch:
         pass
 
-    def on_schedule(self) -> List[Batch]:
+    def on_schedule(self) -> list[Batch]:
         scheduled_batches = []
         while self._num_running_batches < self._max_inflight_batches:
             batch = self._get_next_batch()

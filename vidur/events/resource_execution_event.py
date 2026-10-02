@@ -10,6 +10,14 @@ def submit_native_batches(time, replica_id, stage_id, stage):
     while stage._batch_queue:
         batch = stage._batch_queue[0]
         plan = stage._execution_time_predictor.get_execution_plan(batch, stage_id)
+        for activity in plan.activities:
+            if any(
+                access.request_id not in batch.request_ids
+                for access in activity.memory_reads + activity.memory_writes
+            ):
+                raise ValueError(
+                    "activity memory access references a request outside its batch"
+                )
         executor.submit((stage_id, batch.id), plan, time)
         stage._batch_queue.pop(0)
         batch_stage = BatchStage(
@@ -86,6 +94,8 @@ class ResourceActivityEndEvent(BaseEvent):
             "start_seconds": self.start,
             "resources": list(self.activity.resources),
             "dependencies": list(self.activity.dependencies),
+            "memory_reads": [vars(access) for access in self.activity.memory_reads],
+            "memory_writes": [vars(access) for access in self.activity.memory_writes],
         }
 
     def to_chrome_trace(self):

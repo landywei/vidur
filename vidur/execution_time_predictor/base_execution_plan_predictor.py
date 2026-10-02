@@ -22,5 +22,13 @@ class BaseExecutionPlanPredictor(ABC):
         """Return a costed plan; no scheduling or request mutation here."""
         raise NotImplementedError
 
+    def memory_pool_capacities(self):
+        """Return usable replica-wide byte capacities; empty disables pool admission."""
+        return {}
+
+    def request_memory_requirements(self, request):
+        """Declare a stable maximum byte footprint per pool; do not allocate here."""
+        return {}
+
     def get_execution_time(self, batch, pipeline_stage):
         raise RuntimeError("execution-plan predictors require native activity events")

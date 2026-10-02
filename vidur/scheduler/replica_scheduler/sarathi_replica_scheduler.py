@@ -15,12 +15,17 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
         self._preempted_requests = []
         # For vLLM and its derivatives, we only need to set a loose max batch size
         # Memory requirements are handled explicitly by the scheduler
-        self._max_micro_batch_size = self._config.micro_batch_size or self._config.batch_size_cap // self._num_stages
+        self._max_micro_batch_size = (
+            self._config.micro_batch_size
+            or self._config.batch_size_cap // self._num_stages
+        )
         self._watermark_blocks = int(
             self._config.watermark_blocks_fraction * self._config.num_blocks
         )
 
     def _can_allocate_request(self, request: Request) -> bool:
+        if not self._can_reserve_native_memory(request):
+            return False
         if request.id not in self._allocation_map:
             # new request
             num_required_blocks = ceil(
@@ -37,6 +42,7 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
         return self._config.num_blocks - self._num_allocated_blocks >= 1
 
     def _allocate_request(self, request: Request) -> None:
+        self._reserve_native_memory(request)
         if request.id not in self._allocation_map:
             # new request
             num_required_blocks = ceil(
@@ -48,9 +54,9 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
         num_tokens_reserved = self._allocation_map[request.id] * self._config.block_size
         num_tokens_required = max(0, request.num_processed_tokens - num_tokens_reserved)
 
-        assert (
-            num_tokens_required == 0 or num_tokens_required == 1
-        ), f"num_tokens_required: {num_tokens_required}"
+        assert num_tokens_required == 0 or num_tokens_required == 1, (
+            f"num_tokens_required: {num_tokens_required}"
+        )
 
         if num_tokens_required == 0:
             return
@@ -63,6 +69,7 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
         for request in batch.requests:
             if request.completed:
                 self.free(request.id)
+                self._memory_requirements.pop(request.id, None)
             else:
                 self._preempted_requests.append(request)
 
