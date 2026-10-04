@@ -43,4 +43,3 @@ class NativeExecutionProvider:
         return self.memory_policy.request_step_memory_requirements(
             RequestState.from_request(request), next_num_tokens
         )
-
