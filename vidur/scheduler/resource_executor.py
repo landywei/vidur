@@ -4,7 +4,7 @@ Only ready work reserves capacity. Completion releases capacity before the next
 dispatch. No future calendar reservations or paper-specific overlap formulas.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from math import isfinite
 
 from vidur.entities.execution_plan import ExecutionPlan
@@ -29,6 +29,7 @@ class ResourceExecutor:
             raise ValueError("resource capacities must be named positive integers")
         self.used = dict.fromkeys(self.capacities, 0)
         self.plans = {}
+        self._evidence = {}
         self.running = {}
         self.time = 0.0
 
@@ -56,6 +57,33 @@ class ResourceExecutor:
                     activity.memory_releases,
                 )
         self.plans[key] = PlanState(plan, time)
+        # Store repeated evidence once. Long pipeline runs can submit millions
+        # of plans; their per-activity history belongs in optional event traces.
+        provenance = tuple(sorted({a.cost_provenance for a in plan.activities}))
+        granularity = tuple(sorted({a.cost_granularity for a in plan.activities}))
+        signature = (
+            len(plan.activities), tuple(plan.limitations),
+            tuple(plan.cost_adjustments), provenance, granularity,
+        )
+        if signature not in self._evidence:
+            self._evidence[signature] = {
+                "first_plan_key": key,
+                "first_submitted_at_seconds": time,
+                "submitted_plan_count": 0,
+                "activity_count": len(plan.activities),
+                "limitations": list(plan.limitations),
+                "cost_adjustments": [asdict(c) for c in plan.cost_adjustments],
+                "cost_provenance": list(provenance),
+                "cost_granularity": list(granularity),
+            }
+        record = self._evidence[signature]
+        record["submitted_plan_count"] += 1
+        record["last_plan_key"] = key
+        record["last_submitted_at_seconds"] = time
+
+    @property
+    def plan_evidence(self):
+        return list(self._evidence.values())
 
     def dispatch(self, time):
         self._advance(time)

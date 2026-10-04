@@ -29,30 +29,7 @@ class BaseExecutionTimePredictor(ABC):
             self._model_config.num_layers // self._replica_config.num_pipeline_stages
         )
 
-    # Opt-in: native predictors return activities instead of legacy slot totals.
     uses_execution_plans = False
-
-    def resource_capacities(self):
-        raise NotImplementedError
-
-    def get_execution_plan(self, batch, pipeline_stage):
-        raise NotImplementedError
-
-    def memory_pool_capacities(self):
-        """Return usable replica-wide byte capacities; empty disables pool admission."""
-        return {}
-
-    def request_step_memory_requirements(self, request, next_num_tokens):
-        """Optional minimum bytes for this scheduled step; None uses fixed bounds.
-
-        Declare demand only. Native admission owns allocation and preemption.
-        Do not use realized future output length to determine incremental demand.
-        """
-        return
-
-    def request_memory_requirements(self, request):
-        """Declare a stable maximum byte footprint per pool; do not allocate here."""
-        return {}
 
     def get_execution_time(self, batch: Batch, pipeline_stage: int) -> ExecutionTime:
         if pipeline_stage == self._replica_config.num_pipeline_stages - 1:

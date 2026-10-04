@@ -1,10 +1,10 @@
 import atexit
-import heapq
 import json
 
 from vidur.config import SimulationConfig
 from vidur.entities import Cluster
-from vidur.events import BaseEvent, RequestArrivalEvent
+from vidur.event_loop import EventLoop
+from vidur.events import RequestArrivalEvent
 from vidur.logger import init_logger
 from vidur.metrics import MetricsStore
 from vidur.request_generator import RequestGeneratorRegistry
@@ -13,20 +13,15 @@ from vidur.scheduler import BaseGlobalScheduler, GlobalSchedulerRegistry
 logger = init_logger(__name__)
 
 
-class Simulator:
+class Simulator(EventLoop):
     def __init__(self, config: SimulationConfig) -> None:
         self._config: SimulationConfig = config
 
-        self._time = 0
-        self._terminate = False
-        self._time_limit = self._config.time_limit
-        if not self._time_limit:
-            self._time_limit = float("inf")
-
-        self._event_queue = []
-
-        self._event_trace = []
-        self._event_chrome_trace = []
+        super().__init__(
+            config.time_limit,
+            config.metrics_config.write_json_trace,
+            config.metrics_config.enable_chrome_trace,
+        )
 
         self._cluster = Cluster(
             self._config.cluster_config,
@@ -60,25 +55,7 @@ class Simulator:
             f"Starting simulation with cluster: {self._cluster} and {len(self._event_queue)} requests"
         )
 
-        while self._event_queue and not self._terminate:
-            _, event = heapq.heappop(self._event_queue)
-            self._set_time(event._time)
-            new_events = event.handle_event(self._scheduler, self._metric_store)
-            self._add_events(new_events)
-
-            if self._config.metrics_config.write_json_trace:
-                self._event_trace.append(event.to_dict())
-
-            if self._config.metrics_config.enable_chrome_trace:
-                chrome_trace = event.to_chrome_trace()
-                if chrome_trace:
-                    self._event_chrome_trace.append(chrome_trace)
-
-        if not self._scheduler.is_empty() and not self._terminate:
-            raise RuntimeError(
-                "simulation has unfinished requests with no events; check admission "
-                "capacity, execution dependencies and memory residency"
-            )
+        super().run()
 
         logger.info(f"Simulation ended at: {self._time}s")
 
@@ -96,26 +73,11 @@ class Simulator:
             self._write_chrome_trace()
             logger.info("Chrome event trace written")
 
-    def _add_event(self, event: BaseEvent) -> None:
-        heapq.heappush(self._event_queue, (event._priority_number, event))
-
-    def _add_events(self, events: list[BaseEvent]) -> None:
-        for event in events:
-            self._add_event(event)
-
     def _init_event_queue(self) -> None:
         requests = self._request_generator.generate()
 
         for request in requests:
             self._add_event(RequestArrivalEvent(request.arrived_at, request))
-
-    def _set_time(self, time: float) -> None:
-        self._time = time
-        if self._time > self._time_limit:
-            logger.info(
-                f"Time limit reached: {self._time_limit}s terminating the simulation."
-            )
-            self._terminate = True
 
     def _write_event_trace(self) -> None:
         trace_file = f"{self._config.metrics_config.output_dir}/event_trace.json"

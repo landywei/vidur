@@ -48,6 +48,9 @@ class BaseReplicaScheduler(ABC):
         self._memory_recovery = False
         self._resource_executor = None
         if execution_time_predictor.uses_execution_plans:
+            validator = getattr(execution_time_predictor, "validate_serving", None)
+            if validator is not None:
+                validator()
             from vidur.scheduler.memory_pool_manager import MemoryPoolManager
             from vidur.scheduler.resource_executor import ResourceExecutor
 
@@ -100,6 +103,28 @@ class BaseReplicaScheduler(ABC):
             )
             for stage_id in range(num_stages)
         }
+
+    def on_native_plan_complete(self, key, time):
+        from vidur.events.batch_stage_end_event import BatchStageEndEvent
+
+        stage_id, batch_id = key
+        stage = self.get_replica_stage_scheduler(stage_id)
+        batch, batch_stage = stage.native_batches.pop(batch_id)
+        return [
+            BatchStageEndEvent(
+                time,
+                self._replica_id,
+                stage_id,
+                stage.is_last_stage,
+                batch,
+                batch_stage,
+            )
+        ]
+
+    def on_native_memory_release(self, time):
+        from vidur.events.replica_schedule_event import ReplicaScheduleEvent
+
+        return [ReplicaScheduleEvent(time, self._replica_id)]
 
     @property
     def num_pending_requests(self) -> int:

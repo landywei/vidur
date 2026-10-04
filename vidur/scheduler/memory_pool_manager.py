@@ -21,6 +21,21 @@ class MemoryPoolManager:
         self.resident = {}
         self.readers = {}
         self.writers = set()
+        self._execution_started = False
+        self._residency_initialized = False
+
+    def initialize_residency(self, accesses):
+        """Seed an explicit initial-state fixture before any memory execution.
+
+        Validate the entire fixture before publishing any prefix. Reservations
+        remain mandatory; this does not bypass capacity or access readiness.
+        """
+        if self._execution_started or self._residency_initialized:
+            raise ValueError("initial residency requires pristine memory state")
+        self.validate_accesses((), accesses)
+        self._residency_initialized = True
+        for access in accesses:
+            self.resident[access.request_id, access.pool] = access.bytes
 
     def validate_requirements(self, requirements):
         if any(
@@ -127,6 +142,7 @@ class MemoryPoolManager:
     def begin(self, reads, writes, releases=()):
         if not self.ready(reads, writes, releases):
             raise ValueError("memory activity is not ready")
+        self._execution_started = True
         for access in reads:
             key = (access.request_id, access.pool)
             self.readers[key] = self.readers.get(key, 0) + 1

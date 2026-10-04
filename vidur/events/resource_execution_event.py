@@ -9,17 +9,12 @@ def submit_native_batches(time, replica_id, stage_id, stage):
     executor = stage.resource_executor
     while stage._batch_queue:
         batch = stage._batch_queue[0]
-        plan = stage._execution_time_predictor.get_execution_plan(batch, stage_id)
-        for activity in plan.activities:
-            if any(
-                access.request_id not in batch.request_ids
-                for access in activity.memory_reads
-                + activity.memory_writes
-                + activity.memory_releases
-            ):
-                raise ValueError(
-                    "activity memory access references a request outside its batch"
-                )
+        provider = stage._execution_time_predictor
+        from vidur.scheduler.execution_plan_builder import SelectedWork
+
+        plan = provider.execution_plan_builder.build(
+            SelectedWork.from_batch(batch, stage_id)
+        )
         executor.submit((stage_id, batch.id), plan, time)
         stage._batch_queue.pop(0)
         batch_stage = BatchStage(
@@ -36,28 +31,14 @@ class ResourceDispatchEvent(BaseEvent):
         self.replica_id = replica_id
 
     def handle_event(self, scheduler, metrics_store):
-        from vidur.events.batch_stage_end_event import BatchStageEndEvent
-
         replica = scheduler.get_replica_scheduler(self.replica_id)
         executor = replica._resource_executor
         events = []
         for key in list(executor.plans):
             if not executor.finished(key):
                 continue
-            stage_id, batch_id = key
-            stage = replica.get_replica_stage_scheduler(stage_id)
-            batch, batch_stage = stage.native_batches.pop(batch_id)
             executor.retire(key)
-            events.append(
-                BatchStageEndEvent(
-                    self.time,
-                    self.replica_id,
-                    stage_id,
-                    stage.is_last_stage,
-                    batch,
-                    batch_stage,
-                )
-            )
+            events.extend(replica.on_native_plan_complete(key, self.time))
         for key, activity, start, finish in executor.dispatch(self.time):
             events.append(
                 ResourceActivityEndEvent(finish, self.replica_id, key, activity, start)
@@ -85,9 +66,8 @@ class ResourceActivityEndEvent(BaseEvent):
         executor.complete(self.key, self.activity.name, self.time)
         events = [ResourceDispatchEvent(self.time, self.replica_id)]
         if self.activity.memory_releases:
-            from vidur.events.replica_schedule_event import ReplicaScheduleEvent
-
-            events.append(ReplicaScheduleEvent(self.time, self.replica_id))
+            replica = scheduler.get_replica_scheduler(self.replica_id)
+            events.extend(replica.on_native_memory_release(self.time))
         return events
 
     def to_dict(self):
@@ -101,6 +81,8 @@ class ResourceActivityEndEvent(BaseEvent):
             "start_seconds": self.start,
             "resources": list(self.activity.resources),
             "dependencies": list(self.activity.dependencies),
+            "cost_provenance": self.activity.cost_provenance,
+            "cost_granularity": self.activity.cost_granularity,
             "memory_reads": [vars(access) for access in self.activity.memory_reads],
             "memory_writes": [vars(access) for access in self.activity.memory_writes],
             "memory_releases": [
