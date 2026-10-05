@@ -16,6 +16,18 @@ class PlanState:
     submitted_at: float
     started: set = field(default_factory=set)
     completed: set = field(default_factory=set)
+    ready: dict = field(default_factory=dict)
+    dependents: dict = field(default_factory=dict)
+    remaining_dependencies: list = field(default_factory=list)
+
+    def __post_init__(self):
+        self.dependents = {a.name: [] for a in self.plan.activities}
+        for index, activity in enumerate(self.plan.activities):
+            self.remaining_dependencies.append(len(activity.dependencies))
+            if not activity.dependencies:
+                self.ready[index] = activity
+            for name in activity.dependencies:
+                self.dependents[name].append(index)
 
 
 class ResourceExecutor:
@@ -90,11 +102,10 @@ class ResourceExecutor:
         started = []
         # Dict insertion order is FIFO across plans; activity order breaks ties.
         for key, state in self.plans.items():
-            for activity in state.plan.activities:
-                if activity.name in state.started:
-                    continue
-                if not set(activity.dependencies) <= state.completed:
-                    continue
+            # Only dependency-ready work can start. Sorting preserves the
+            # original activity-order priority after out-of-order completions.
+            for index in sorted(state.ready):
+                activity = state.ready[index]
                 if any(self.used[r] >= self.capacities[r] for r in activity.resources):
                     continue
                 if self.memory_manager is not None and not self.memory_manager.ready(
@@ -113,6 +124,7 @@ class ResourceExecutor:
                         activity.memory_releases,
                     )
                 state.started.add(activity.name)
+                del state.ready[index]
                 for resource in activity.resources:
                     self.used[resource] += 1
                 self.running[key, activity.name] = (activity, time, finish)
@@ -131,7 +143,12 @@ class ResourceExecutor:
         del self.running[key, name]
         for resource in activity.resources:
             self.used[resource] -= 1
-        self.plans[key].completed.add(name)
+        state = self.plans[key]
+        state.completed.add(name)
+        for index in state.dependents[name]:
+            state.remaining_dependencies[index] -= 1
+            if state.remaining_dependencies[index] == 0:
+                state.ready[index] = state.plan.activities[index]
 
     def finished(self, key):
         state = self.plans[key]
