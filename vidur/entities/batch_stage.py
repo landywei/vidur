@@ -32,6 +32,9 @@ class BatchStage(BaseEntity):
 
         self._requests = requests
         self._num_tokens = num_tokens
+        # Captured before execution; request progress advances only after the
+        # final stage completes, so this is the phase of the work in this batch.
+        self._prefill_complete = [request.is_prefill_complete for request in requests]
         self._batch_id = batch_id
         self._replica_id = replica_id
         self._pipeline_stage = pipeline_stage
@@ -138,6 +141,7 @@ class BatchStage(BaseEntity):
                 "batch_size": self.size,
                 "request_ids": self.request_ids,
                 "num_tokens": self._num_tokens,
+                "prefill_complete": self._prefill_complete,
                 # "requests": [request.to_dict() for request in self._requests],
             },
         }
