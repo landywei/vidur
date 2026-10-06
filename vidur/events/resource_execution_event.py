@@ -79,6 +79,7 @@ class ResourceActivityEndEvent(BaseEvent):
             "batch_id": self.key[1],
             "activity": self.activity.name,
             "start_seconds": self.start,
+            "duration_seconds": self.activity.duration_seconds,
             "resources": list(self.activity.resources),
             "dependencies": list(self.activity.dependencies),
             "cost_provenance": self.activity.cost_provenance,
