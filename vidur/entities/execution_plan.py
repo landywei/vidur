@@ -41,6 +41,8 @@ class ExecutionActivity:
     memory_releases: tuple[MemoryAccess, ...] = ()
     cost_provenance: str = ""
     cost_granularity: str = ""
+    # Opaque identity of the plan this activity belongs to, for trace joins.
+    plan_id: str = ""
 
 
 @dataclass(frozen=True)

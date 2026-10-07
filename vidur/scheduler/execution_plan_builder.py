@@ -163,6 +163,8 @@ class PlanDeclaration:
     activities: tuple[ActivityDeclaration, ...]
     # Empty/omitted work needs an explicit evidence boundary too.
     limitations: tuple[str, ...] = ()
+    # Optional identity copied onto every activity and its trace events.
+    plan_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -305,6 +307,7 @@ class ExecutionPlanBuilder:
                     activity.memory_releases,
                     cost.provenance,
                     cost.granularity,
+                    declaration.plan_id,
                 )
             )
         if not activities and not declaration.limitations:

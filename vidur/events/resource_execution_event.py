@@ -89,6 +89,7 @@ class ResourceActivityEndEvent(BaseEvent):
             "memory_releases": [
                 vars(access) for access in self.activity.memory_releases
             ],
+            **({"plan_id": self.activity.plan_id} if self.activity.plan_id else {}),
         }
 
     def to_chrome_trace(self):
