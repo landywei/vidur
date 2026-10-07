@@ -218,6 +218,13 @@ class BaseReplicaScheduler(ABC):
             self._memory_manager.grow(
                 request.id, self._native_memory_demand(request, next_num_tokens)
             )
+            if request.warm_start:
+                # A warm start's context is already resident where the
+                # provider says; seed it once its reservation exists.
+                self._memory_manager.seed_residency(
+                    request.id,
+                    self._execution_time_predictor.request_initial_residency(request),
+                )
 
     def _preempt_request(self, request):
         # Only callers holding an idle request may discard its resident KV.

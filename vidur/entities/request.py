@@ -59,6 +59,21 @@ class Request(BaseEntity):
 
         self._num_restarts = 0
 
+        # A warm start arrives with its prompt already processed and its first
+        # outputs produced: the step it runs first is a decode step.
+        self._warm_start = num_processed_tokens > 0
+        if self._warm_start:
+            if not (
+                num_prefill_tokens
+                < num_processed_tokens
+                < num_prefill_tokens + num_decode_tokens
+            ):
+                raise ValueError(
+                    "a warm start needs a processed prompt and remaining outputs"
+                )
+            self._is_prefill_complete = True
+            self._prefill_completed_at = arrived_at
+
     @property
     def size(self) -> Tuple[int, int]:
         return (self._num_prefill_tokens, self._num_decode_tokens)
@@ -192,6 +207,10 @@ class Request(BaseEntity):
         return self._num_restarts
 
     @property
+    def warm_start(self) -> bool:
+        return self._warm_start
+
+    @property
     def is_prefill_complete(self) -> bool:
         return self._is_prefill_complete
 
@@ -305,5 +324,7 @@ class Request(BaseEntity):
         self._preempted = False
         self._completed = False
         self._is_prefill_complete = False
+        # A recomputed request rebuilds its context; it is no longer warm.
+        self._warm_start = False
 
         self._num_restarts += 1

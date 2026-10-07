@@ -37,6 +37,13 @@ class NativeExecutionProvider:
             RequestState.from_request(request)
         )
 
+    def request_initial_residency(self, request):
+        """Resident prefixes of a warm-start request, by pool."""
+        policy = self.memory_policy
+        if policy is None or not hasattr(policy, "request_initial_residency"):
+            raise ValueError("warm-start requests need a memory policy with residency")
+        return policy.request_initial_residency(RequestState.from_request(request))
+
     def request_step_memory_requirements(self, request, next_num_tokens):
         if self.memory_policy is None:
             return None

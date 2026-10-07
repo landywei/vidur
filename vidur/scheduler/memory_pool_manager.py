@@ -37,6 +37,17 @@ class MemoryPoolManager:
         for access in accesses:
             self.resident[access.request_id, access.pool] = access.bytes
 
+    def seed_residency(self, request_id, prefixes):
+        """Publish a warm-start request's resident prefixes once, before it runs."""
+        reserved = self.reservations.get(request_id, {})
+        for pool, size in prefixes.items():
+            if type(size) is not int or size < 0 or size > reserved.get(pool, -1):
+                raise ValueError("warm-start residency exceeds the reservation")
+        for pool, size in prefixes.items():
+            key = (request_id, pool)
+            if not self.resident.get(key):
+                self.resident[key] = size
+
     def validate_requirements(self, requirements):
         if any(
             p not in self.capacities or type(n) is not int or n < 0
