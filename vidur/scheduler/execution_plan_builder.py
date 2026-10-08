@@ -10,7 +10,6 @@ from math import isfinite
 from typing import Protocol
 
 from vidur.entities.execution_plan import (
-    CostAdjustment,
     ExecutionActivity,
     ExecutionPlan,
     MemoryAccess,
@@ -62,23 +61,6 @@ class SelectedWork:
             pipeline_stage,
         )
 
-    @property
-    def num_prefill_tokens(self):
-        return sum(
-            r.next_num_tokens for r in self.requests if not r.is_prefill_complete
-        )
-
-    def uniform_decode_shape(self):
-        decode = [r for r in self.requests if r.is_prefill_complete]
-        if not decode:
-            return None
-        if len(decode) != len(self.requests):
-            raise ValueError("expected a decode-only batch; got a mixed batch")
-        contexts = {r.num_processed_tokens for r in decode}
-        if len(contexts) != 1:
-            raise ValueError("expected a uniform batch; KV lengths differ")
-        return len(decode), contexts.pop()
-
     def __post_init__(self):
         if type(self.pipeline_stage) is not int or self.pipeline_stage < 0:
             raise ValueError("pipeline stage must be a nonnegative integer")
@@ -129,36 +111,6 @@ class ActivityDeclaration:
 
 
 @dataclass(frozen=True)
-class ExecutionPhase:
-    """Concurrent serial branches; the next phase waits for every branch end."""
-
-    branches: tuple[tuple[ActivityDeclaration, ...], ...]
-
-
-def expand_phases(phases):
-    """Expand barriers without scheduling, costs, or architecture knowledge."""
-    from dataclasses import replace
-
-    declarations = []
-    previous = ()
-    for phase in phases:
-        ends = []
-        for branch in phase.branches:
-            dependencies = previous
-            for activity in branch:
-                dependencies = tuple(
-                    dict.fromkeys(dependencies + activity.dependencies)
-                )
-                declarations.append(replace(activity, dependencies=dependencies))
-                dependencies = (activity.name,)
-            if branch:
-                ends.extend(dependencies)
-        if ends:
-            previous = tuple(ends)
-    return tuple(declarations)
-
-
-@dataclass(frozen=True)
 class PlanDeclaration:
     activities: tuple[ActivityDeclaration, ...]
     # Empty/omitted work needs an explicit evidence boundary too.
@@ -178,62 +130,6 @@ class BoundCost:
             raise ValueError("bound costs must be finite nonnegative seconds")
         if not self.provenance.strip() or not self.granularity.strip():
             raise ValueError("bound costs require provenance and granularity")
-
-
-@dataclass(frozen=True)
-class CostMask:
-    cost_key: str
-    reason: str
-
-
-@dataclass(frozen=True)
-class CostFixture:
-    cost_key: str
-    seconds: float
-    provenance: str
-    reason: str
-
-
-@dataclass(frozen=True)
-class BuildControls:
-    """Only explicit costs may be changed; topology and resources remain real."""
-
-    masks: tuple[CostMask, ...] = ()
-    fixtures: tuple[CostFixture, ...] = ()
-
-    def apply(self, costs, declarations):
-        declared = {a.cost_key for a in declarations}
-        seen = set()
-        adjusted = dict(costs)
-        records = []
-        for entry in self.masks + self.fixtures:
-            if entry.cost_key in seen or entry.cost_key not in declared:
-                raise ValueError("duplicate or unused cost control")
-            if not entry.reason.strip():
-                raise ValueError("cost controls require a reason")
-            seen.add(entry.cost_key)
-            if entry.cost_key not in costs:
-                raise ValueError(f"missing cost binding: {entry.cost_key}")
-            original = costs[entry.cost_key]
-            masked = isinstance(entry, CostMask)
-            replacement = BoundCost(
-                0.0 if masked else entry.seconds,
-                f"Explicit cost mask: {entry.reason}" if masked else entry.provenance,
-                original.granularity,
-            )
-            adjusted[entry.cost_key] = replacement
-            records.append(
-                CostAdjustment(
-                    entry.cost_key,
-                    "mask" if masked else "fixture",
-                    entry.reason,
-                    original.seconds,
-                    replacement.seconds,
-                    original.provenance,
-                    replacement.provenance,
-                )
-            )
-        return adjusted, tuple(records)
 
 
 class ArchitecturePolicy(Protocol):
@@ -269,16 +165,9 @@ class ExecutionPlanBuilder:
         self.policy = policy
         self.costs = costs
 
-    def build(
-        self, work: SelectedWork, controls: BuildControls | None = None
-    ) -> ExecutionPlan:
+    def build(self, work: SelectedWork) -> ExecutionPlan:
         declaration = self.policy.declare(work)
-        # Domain validation always precedes masks/fixtures; controls cannot
-        # manufacture support for an uncalibrated workload.
         costs = self.costs.bind(work)
-        costs, adjustments = (controls or BuildControls()).apply(
-            costs, declaration.activities
-        )
         capacities = self.policy.resource_capacities()
         pools = self.policy.memory_pool_capacities()
         ids = {r.request_id for r in work.requests}
@@ -312,6 +201,6 @@ class ExecutionPlanBuilder:
             )
         if not activities and not declaration.limitations:
             raise ValueError("empty plans require an explicit omission boundary")
-        plan = ExecutionPlan(tuple(activities), declaration.limitations, adjustments)
+        plan = ExecutionPlan(tuple(activities), declaration.limitations)
         plan.validate(capacities)
         return plan

@@ -10,17 +10,12 @@ from vidur.scheduler.execution_plan_builder import RequestState
 class NativeExecutionProvider:
     uses_execution_plans = True
 
-    def __init__(self, builder, memory_policy=None, serving_rejection=None):
+    def __init__(self, builder, memory_policy=None):
         self.execution_plan_builder = builder
         self.memory_policy = memory_policy
-        self.serving_rejection = serving_rejection
 
     def get_execution_time(self, batch, pipeline_stage):
         raise RuntimeError("native execution requires activity events, not slot timing")
-
-    def validate_serving(self):
-        if getattr(self, "serving_rejection", None):
-            raise ValueError(self.serving_rejection)
 
     def resource_capacities(self):
         return self.execution_plan_builder.policy.resource_capacities()

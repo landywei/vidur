@@ -48,9 +48,6 @@ class BaseReplicaScheduler(ABC):
         self._memory_recovery = False
         self._resource_executor = None
         if execution_time_predictor.uses_execution_plans:
-            validator = getattr(execution_time_predictor, "validate_serving", None)
-            if validator is not None:
-                validator()
             from vidur.scheduler.memory_pool_manager import MemoryPoolManager
             from vidur.scheduler.resource_executor import ResourceExecutor
 

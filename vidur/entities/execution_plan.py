@@ -46,22 +46,10 @@ class ExecutionActivity:
 
 
 @dataclass(frozen=True)
-class CostAdjustment:
-    cost_key: str
-    kind: str
-    reason: str
-    original_seconds: float
-    replacement_seconds: float
-    original_provenance: str
-    replacement_provenance: str
-
-
-@dataclass(frozen=True)
 class ExecutionPlan:
     # Topological order also specifies deterministic ready-activity priority.
     activities: tuple[ExecutionActivity, ...]
     limitations: tuple[str, ...] = ()
-    cost_adjustments: tuple[CostAdjustment, ...] = ()
 
     def validate(self, capacities):
         known = set()
