@@ -5,23 +5,28 @@ from vidur.events.base_event import BaseEvent
 from vidur.types import EventType
 
 
-def submit_native_batches(time, replica_id, stage_id, stage):
-    executor = stage.resource_executor
-    while stage._batch_queue:
-        batch = stage._batch_queue[0]
-        provider = stage._execution_time_predictor
-        from vidur.scheduler.execution_plan_builder import SelectedWork
+def submit_native_batch(time, replica_id, stage_id, stage):
+    """Start the stage's next queued batch if the stage is idle.
 
-        plan = provider.execution_plan_builder.build(
-            SelectedWork.from_batch(batch, stage_id)
-        )
-        executor.submit((stage_id, batch.id), plan, time)
-        stage._batch_queue.pop(0)
-        batch_stage = BatchStage(
-            batch.id, replica_id, stage_id, None, None, batch.requests, batch.num_tokens
-        )
-        batch_stage.on_schedule(time)
-        stage.native_batches[batch.id] = (batch, batch_stage)
+    A stage runs one batch's plan at a time, as Vidur's slot path and real
+    pipeline-parallel serving do; batches overlap only across stages. A plan
+    may still run its own activities concurrently on different resources.
+    """
+    if stage._is_busy or not stage._batch_queue:
+        return []
+    from vidur.scheduler.execution_plan_builder import SelectedWork
+
+    batch = stage._batch_queue.pop(0)
+    plan = stage._execution_time_predictor.execution_plan_builder.build(
+        SelectedWork.from_batch(batch, stage_id)
+    )
+    stage.resource_executor.submit((stage_id, batch.id), plan, time)
+    stage._is_busy = True
+    batch_stage = BatchStage(
+        batch.id, replica_id, stage_id, None, None, batch.requests, batch.num_tokens
+    )
+    batch_stage.on_schedule(time)
+    stage.native_batches[batch.id] = (batch, batch_stage)
     return [ResourceDispatchEvent(time, replica_id)]
 
 

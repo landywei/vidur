@@ -14,9 +14,10 @@ wraps an `ExecutionPlanBuilder(policy, costs)` and an optional memory policy:
   replica's resources and byte pools.
 
 Activity completions and resource dispatch run on the normal event heap. A
-replica-wide executor starts dependency-ready activities in plan order,
-atomically reserves one unit of every named resource, and releases it on
-completion. It does not reserve resources for future work or infer
+stage runs one batch's plan at a time, as the slot path does; batches overlap
+across stages. A replica-wide executor starts dependency-ready activities in
+plan order, atomically reserves one unit of every named resource, and releases
+it on completion. It does not reserve resources for future work or infer
 interference costs; costs are fixed once a plan is submitted. This is an
 analytical model, not hardware execution or cycle simulation.
 
