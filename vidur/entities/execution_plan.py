@@ -67,3 +67,83 @@ class ExecutionPlan:
             if not set(activity.dependencies) <= known:
                 raise ValueError("dependencies must precede their consumers")
             known.add(activity.name)
+
+
+@dataclass(frozen=True, eq=False)
+class PlanStructure:
+    """Activities shared by many plans; requests are given by position.
+
+    Accesses are (request position, pool, bytes). Activity ``i`` is named
+    ``a<i>`` and depends on earlier activities by index. Identity (not value)
+    is the structure's key: equal structures may still be distinct objects.
+    """
+
+    durations: tuple
+    resources: tuple
+    dependencies: tuple
+    reads: tuple
+    writes: tuple
+    cost_provenance: tuple
+    cost_granularity: tuple
+    plan_id: str = ""
+    limitations: tuple = ()
+
+    def __post_init__(self):
+        count = len(self.durations)
+        for values in (
+            self.resources,
+            self.dependencies,
+            self.reads,
+            self.writes,
+            self.cost_provenance,
+            self.cost_granularity,
+        ):
+            if len(values) != count:
+                raise ValueError("plan structure fields must align by activity")
+        for index, deps in enumerate(self.dependencies):
+            if any(type(d) is not int or not 0 <= d < index for d in deps):
+                raise ValueError("dependencies must precede their consumers")
+        if not count and not self.limitations:
+            raise ValueError("empty plans require an explicit omission boundary")
+
+    def expand(self, request_ids):
+        """The equivalent ExecutionPlan for one batch's request IDs."""
+        return ExecutionPlan(
+            tuple(
+                ExecutionActivity(
+                    f"a{i}",
+                    self.durations[i],
+                    self.resources[i],
+                    tuple(f"a{d}" for d in self.dependencies[i]),
+                    tuple(
+                        MemoryAccess(request_ids[p], pool, n)
+                        for p, pool, n in self.reads[i]
+                    ),
+                    tuple(
+                        MemoryAccess(request_ids[p], pool, n)
+                        for p, pool, n in self.writes[i]
+                    ),
+                    (),
+                    self.cost_provenance[i],
+                    self.cost_granularity[i],
+                    self.plan_id,
+                )
+                for i in range(len(self.durations))
+            ),
+            self.limitations,
+        )
+
+
+@dataclass(frozen=True)
+class CompactPlan:
+    """A plan given as a shared structure and the batch's request IDs.
+
+    The executor may run it compressed (vidur.scheduler.compressed_execution)
+    or expand it into an ExecutionPlan; both give the same schedule.
+    """
+
+    structure: PlanStructure
+    request_ids: tuple
+
+    def expand(self):
+        return self.structure.expand(self.request_ids)

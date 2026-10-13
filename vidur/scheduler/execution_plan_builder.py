@@ -165,6 +165,16 @@ class ExecutionPlanBuilder:
         self.policy = policy
         self.costs = costs
 
+    def build_compact(self, work: SelectedWork):
+        """The policy's CompactPlan when it provides one, else `build`.
+
+        A policy's `compact_plan(work)` returns a CompactPlan, with its costs
+        already bound, or None for an ordinary plan.
+        """
+        compact = getattr(self.policy, "compact_plan", None)
+        plan = compact(work) if compact is not None else None
+        return self.build(work) if plan is None else plan
+
     def build(self, work: SelectedWork) -> ExecutionPlan:
         declaration = self.policy.declare(work)
         costs = self.costs.bind(work)

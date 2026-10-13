@@ -17,17 +17,21 @@ def submit_native_batch(time, replica_id, stage_id, stage):
     from vidur.scheduler.execution_plan_builder import SelectedWork
 
     batch = stage._batch_queue.pop(0)
-    plan = stage._execution_time_predictor.execution_plan_builder.build(
+    plan = stage._execution_time_predictor.execution_plan_builder.build_compact(
         SelectedWork.from_batch(batch, stage_id)
     )
-    stage.resource_executor.submit((stage_id, batch.id), plan, time)
+    finish = stage.resource_executor.submit((stage_id, batch.id), plan, time)
     stage._is_busy = True
     batch_stage = BatchStage(
         batch.id, replica_id, stage_id, None, None, batch.requests, batch.num_tokens
     )
     batch_stage.on_schedule(time)
     stage.native_batches[batch.id] = (batch, batch_stage)
-    return [ResourceDispatchEvent(time, replica_id)]
+    events = [ResourceDispatchEvent(time, replica_id)]
+    if finish is not None:
+        # A compressed plan has no activity events; this retires it.
+        events.append(ResourceDispatchEvent(finish, replica_id))
+    return events
 
 
 class ResourceDispatchEvent(BaseEvent):
@@ -40,10 +44,10 @@ class ResourceDispatchEvent(BaseEvent):
         executor = replica._resource_executor
         events = []
         for key in list(executor.plans):
-            if not executor.finished(key):
+            if not executor.finished(key, self.time):
                 continue
             plan = executor.plans[key].plan
-            completion = executor.retire(key)
+            completion = executor.retire(key, self.time)
             events.extend(
                 replica.on_native_plan_complete(key, self.time, plan, completion)
             )
