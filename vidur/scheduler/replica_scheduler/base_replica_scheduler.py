@@ -101,12 +101,15 @@ class BaseReplicaScheduler(ABC):
             for stage_id in range(num_stages)
         }
 
-    def on_native_plan_complete(self, key, time):
+    def on_native_plan_complete(self, key, time, plan=None, completion=None):
         from vidur.events.batch_stage_end_event import BatchStageEndEvent
 
         stage_id, batch_id = key
         stage = self.get_replica_stage_scheduler(stage_id)
         batch, batch_stage = stage.native_batches.pop(batch_id)
+        observer = getattr(self._execution_time_predictor, "on_plan_complete", None)
+        if completion is not None and observer is not None:
+            observer(self._replica_id, stage_id, batch_id, plan, completion)
         return [
             BatchStageEndEvent(
                 time,

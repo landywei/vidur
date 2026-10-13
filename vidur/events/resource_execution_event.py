@@ -42,8 +42,11 @@ class ResourceDispatchEvent(BaseEvent):
         for key in list(executor.plans):
             if not executor.finished(key):
                 continue
-            executor.retire(key)
-            events.extend(replica.on_native_plan_complete(key, self.time))
+            plan = executor.plans[key].plan
+            completion = executor.retire(key)
+            events.extend(
+                replica.on_native_plan_complete(key, self.time, plan, completion)
+            )
         for key, activity, start, finish in executor.dispatch(self.time):
             events.append(
                 ResourceActivityEndEvent(finish, self.replica_id, key, activity, start)

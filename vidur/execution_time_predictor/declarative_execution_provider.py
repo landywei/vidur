@@ -14,6 +14,15 @@ class NativeExecutionProvider:
         self.execution_plan_builder = builder
         self.memory_policy = memory_policy
 
+    def on_plan_complete(self, replica_id, stage_id, batch_id, plan, completion):
+        """Forward a retired plan's observed schedule to an optional observer.
+
+        Observation only: the event loop has already fixed every time.
+        """
+        observer = getattr(self.execution_plan_builder.policy, "on_plan_complete", None)
+        if observer is not None:
+            observer(replica_id, stage_id, batch_id, plan, completion)
+
     def get_execution_time(self, batch, pipeline_stage):
         raise RuntimeError("native execution requires activity events, not slot timing")
 

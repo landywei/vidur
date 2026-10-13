@@ -10,6 +10,29 @@ from math import isfinite
 from vidur.entities.execution_plan import ExecutionPlan
 
 
+@dataclass(frozen=True)
+class PlanCompletion:
+    """Observed schedule of one retired plan, indexed like its activities.
+
+    ``binding[i]`` is the activity of the same plan whose completion let
+    activity ``i`` start (its start equals that completion time), or None when
+    it started at submission or after waiting on another plan. Among the
+    plan's completions at that instant, a dependency is preferred, then an
+    activity sharing a resource, then any; ties go to the later activity.
+    ``critical_path`` follows binding activities back from the last
+    completion (ties: the later activity); ``wait_seconds`` is the time
+    between submission and the start of its first activity.
+    """
+
+    submitted_at: float
+    finished_at: float
+    start: tuple
+    finish: tuple
+    binding: tuple
+    critical_path: tuple
+    wait_seconds: float
+
+
 @dataclass
 class PlanState:
     plan: ExecutionPlan
@@ -19,15 +42,68 @@ class PlanState:
     ready: dict = field(default_factory=dict)
     dependents: dict = field(default_factory=dict)
     remaining_dependencies: list = field(default_factory=list)
+    index: dict = field(default_factory=dict)
+    start: list = field(default_factory=list)
+    finish: list = field(default_factory=list)
+    binding: list = field(default_factory=list)
+    # The plan's latest completion instant and the activities completed then.
+    last_time: float = None
+    last_completed: list = field(default_factory=list)
 
     def __post_init__(self):
         self.dependents = {a.name: [] for a in self.plan.activities}
+        count = len(self.plan.activities)
+        self.start = [None] * count
+        self.finish = [None] * count
+        self.binding = [None] * count
         for index, activity in enumerate(self.plan.activities):
+            self.index[activity.name] = index
             self.remaining_dependencies.append(len(activity.dependencies))
             if not activity.dependencies:
                 self.ready[index] = activity
             for name in activity.dependencies:
                 self.dependents[name].append(index)
+
+    def bind(self, index, time):
+        """Record the start of ``index`` and the completion that released it."""
+        self.start[index] = time
+        if self.last_time != time:
+            return
+        activity = self.plan.activities[index]
+        candidates = [
+            d
+            for d in (self.index[name] for name in activity.dependencies)
+            if self.finish[d] == time
+        ]
+        if not candidates:
+            resources = set(activity.resources)
+            candidates = [
+                j
+                for j in self.last_completed
+                if resources.intersection(self.plan.activities[j].resources)
+            ]
+        self.binding[index] = max(candidates or self.last_completed)
+
+    def completion(self):
+        count = len(self.plan.activities)
+        if not count:
+            return PlanCompletion(
+                self.submitted_at, self.submitted_at, (), (), (), (), 0.0
+            )
+        last = max(range(count), key=lambda i: (self.finish[i], i))
+        path = [last]
+        while self.binding[path[-1]] is not None:
+            path.append(self.binding[path[-1]])
+        path.reverse()
+        return PlanCompletion(
+            self.submitted_at,
+            self.finish[last],
+            tuple(self.start),
+            tuple(self.finish),
+            tuple(self.binding),
+            tuple(path),
+            self.start[path[0]] - self.submitted_at,
+        )
 
 
 class ResourceExecutor:
@@ -96,6 +172,7 @@ class ResourceExecutor:
                         activity.memory_releases,
                     )
                 state.started.add(activity.name)
+                state.bind(index, time)
                 del state.ready[index]
                 for resource in activity.resources:
                     self.used[resource] += 1
@@ -117,6 +194,12 @@ class ResourceExecutor:
             self.used[resource] -= 1
         state = self.plans[key]
         state.completed.add(name)
+        index = state.index[name]
+        state.finish[index] = time
+        if state.last_time != time:
+            state.last_time = time
+            state.last_completed = []
+        state.last_completed.append(index)
         for index in state.dependents[name]:
             state.remaining_dependencies[index] -= 1
             if state.remaining_dependencies[index] == 0:
@@ -127,6 +210,7 @@ class ResourceExecutor:
         return len(state.completed) == len(state.plan.activities)
 
     def retire(self, key):
+        """Remove a finished plan and return its observed `PlanCompletion`."""
         if not self.finished(key):
             raise ValueError("cannot retire an unfinished plan")
-        del self.plans[key]
+        return self.plans.pop(key).completion()
