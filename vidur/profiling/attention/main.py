@@ -97,6 +97,17 @@ def parse_args():
         help="The attention backend to profile (default: %(default)s)",
     )
     parser.add_argument(
+        "--short_prefill_chunks",
+        action="store_true",
+        help="Also profile prefill chunks of 1 to 63 tokens",
+    )
+    parser.add_argument(
+        "--prefill_context_grid",
+        action="store_true",
+        help="Profile every prefill chunk at the sequence-length grid of prior "
+        "contexts, not only at multiples of the chunk size",
+    )
+    parser.add_argument(
         "--block_size",
         type=int,
         default=16,
@@ -186,6 +197,8 @@ def main():
         args.max_batch_size,
         args.profile_only_prefill,
         args.profile_only_decode,
+        args.short_prefill_chunks,
+        args.prefill_context_grid,
     )
 
     total_combos = {}
