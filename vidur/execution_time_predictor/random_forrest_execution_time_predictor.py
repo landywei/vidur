@@ -11,6 +11,11 @@ from vidur.execution_time_predictor.sklearn_execution_time_predictor import (
 )
 
 
+# Fixed seed for every forest: a model trained on the same data is the same
+# model, whatever the process trained, loaded or drew at random before it.
+TRAINING_SEED = 0
+
+
 class RandomForrestExecutionTimePredictor(SklearnExecutionTimePredictor):
     def __init__(
         self,
@@ -35,4 +40,8 @@ class RandomForrestExecutionTimePredictor(SklearnExecutionTimePredictor):
         }
 
     def _get_estimator(self):
-        return RandomForestRegressor()
+        return RandomForestRegressor(random_state=TRAINING_SEED)
+
+    def to_dict(self) -> dict:
+        # The seed is part of the cache key, so unseeded models are retrained.
+        return {**super().to_dict(), "random_state": TRAINING_SEED}
