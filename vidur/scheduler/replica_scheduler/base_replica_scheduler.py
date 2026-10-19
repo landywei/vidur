@@ -24,7 +24,8 @@ class AdmissionView:
     including those already selected into the batch being formed.
     `selected`: the new requests already chosen for that batch, with their
     token counts. `candidate` and `candidate_tokens`: the queue head and the
-    tokens it would run. `probe(work)` returns the execution provider's
+    tokens it would run. `queued`: requests waiting in the queue, the
+    candidate included. `probe(work)` returns the execution provider's
     PlanProbe of a SelectedWork run alone (None if infeasible); it never
     changes the simulation. Live requests and schedulers are never exposed.
     """
@@ -38,6 +39,7 @@ class AdmissionView:
     num_stages: int
     max_tokens: int
     probe: Callable[[Any], Any]
+    queued: int = 0
 
 
 class AdmissionPolicy:
@@ -175,6 +177,7 @@ class BaseReplicaScheduler(ABC):
             self._num_stages,
             self._request_generator_config.max_tokens,
             self.probe,
+            len(self._request_queue),
         )
         return bool(self._admission.admit(view))
 

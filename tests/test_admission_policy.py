@@ -42,6 +42,7 @@ def scheduler(policy, resident):
         _num_stages=1,
         _request_generator_config=SimpleNamespace(max_tokens=64),
         probe=lambda work: probe,
+        _request_queue=[request(3), request(4)],
     )
 
 
@@ -69,6 +70,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(view.selected[0][1], 8)
         self.assertEqual(view.candidate.request_id, 3)
         self.assertEqual((view.batch_size_cap, view.max_tokens), (4, 64))
+        self.assertEqual(view.queued, 2)
         self.assertEqual(view.probe(None).makespan_seconds, 1.0)
 
 
