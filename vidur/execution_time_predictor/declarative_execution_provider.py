@@ -23,6 +23,17 @@ class NativeExecutionProvider:
         if observer is not None:
             observer(replica_id, stage_id, batch_id, plan, completion)
 
+    def probe(self, work):
+        """The policy's `PlanProbe` of `work` run alone, or None if infeasible.
+
+        Side-effect free: probing never builds, binds or schedules a plan and
+        changes no accounting. Policies without a `probe` cannot be probed.
+        """
+        probe = getattr(self.execution_plan_builder.policy, "probe", None)
+        if probe is None:
+            raise ValueError("the execution policy provides no cost probe")
+        return probe(work)
+
     def get_execution_time(self, batch, pipeline_stage):
         raise RuntimeError("native execution requires activity events, not slot timing")
 

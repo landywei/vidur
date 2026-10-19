@@ -31,6 +31,17 @@ Native vLLM and Sarathi configurations can decouple `max_inflight_batches` and
 `micro_batch_size` from pipeline depth. All activities in a stage complete
 before stage and batch events advance tokens and release KV.
 
+Serving policies get two hooks. `provider.probe(work)` forwards to an
+optional `policy.probe(work)` that returns a `PlanProbe` (makespan, busy
+seconds and critical-path seconds of `work` run alone) or None for infeasible
+work; schedulers reach it as `scheduler.probe(work)`. A probe is an estimate:
+it never builds, binds or schedules a plan and changes no accounting. An
+`AdmissionPolicy` set with `scheduler.set_admission_policy(policy)` decides,
+after the vLLM or Sarathi scheduler's own cap and memory checks pass, whether
+the queue head joins the batch being formed; it sees an `AdmissionView` of
+request snapshots, caps and the probe. A replica with no resident request
+always admits its queue head, so a policy cannot stall a run.
+
 Chrome traces include activity intervals, resources, dependencies, declared
 duration, plan identity, and stage envelopes with per-request prefill status.
 GPU MFU and operator-slot attribution are omitted on this path. The heap orders

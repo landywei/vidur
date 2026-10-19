@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 from vidur.config import (
     BaseReplicaSchedulerConfig,
@@ -12,6 +14,44 @@ from vidur.scheduler.replica_stage_scheduler import ReplicaStageScheduler
 from vidur.scheduler.utils.memory_planner import MemoryPlanner
 
 logger = init_logger(__name__)
+
+
+@dataclass(frozen=True)
+class AdmissionView:
+    """What an admission policy sees when a queued request could join.
+
+    `resident`: snapshots (RequestState) of the requests holding memory,
+    including those already selected into the batch being formed.
+    `selected`: the new requests already chosen for that batch, with their
+    token counts. `candidate` and `candidate_tokens`: the queue head and the
+    tokens it would run. `probe(work)` returns the execution provider's
+    PlanProbe of a SelectedWork run alone (None if infeasible); it never
+    changes the simulation. Live requests and schedulers are never exposed.
+    """
+
+    resident: tuple
+    selected: tuple
+    candidate: Any
+    candidate_tokens: int
+    batch_size_cap: int
+    max_micro_batch_size: int
+    num_stages: int
+    max_tokens: int
+    probe: Callable[[Any], Any]
+
+
+class AdmissionPolicy:
+    """Decides whether the queue head joins the batch being formed.
+
+    Called only after the scheduler's own capacity, memory and cap checks
+    pass, so a policy can only admit less. `admit` returning False stops new
+    admissions for this batch (FIFO order is kept). A replica with no
+    resident request always admits its queue head, so a policy cannot stall
+    a run.
+    """
+
+    def admit(self, view: AdmissionView) -> bool:
+        return True
 
 
 class BaseReplicaScheduler(ABC):
@@ -41,6 +81,9 @@ class BaseReplicaScheduler(ABC):
         ):
             raise ValueError("micro batch size exceeds resident request cap")
         self._execution_time_predictor = execution_time_predictor
+        self._admission: Optional[AdmissionPolicy] = None
+        # Requests holding memory, by id (for admission views).
+        self._resident = {}
         self._memory_manager = None
         self._memory_requirements = {}
         self._dynamic_memory = False
@@ -100,6 +143,40 @@ class BaseReplicaScheduler(ABC):
             )
             for stage_id in range(num_stages)
         }
+
+    def set_admission_policy(self, policy: Optional[AdmissionPolicy]) -> None:
+        self._admission = policy
+
+    def probe(self, work):
+        """The execution provider's PlanProbe of `work` run alone, or None.
+
+        Observation only: no plan is built, bound or scheduled.
+        """
+        probe = getattr(self._execution_time_predictor, "probe", None)
+        if probe is None:
+            raise ValueError("the execution-time predictor provides no cost probe")
+        return probe(work)
+
+    def _admits(self, request, next_num_tokens, requests, num_tokens) -> bool:
+        """Whether the admission policy lets queued `request` join the batch."""
+        if self._admission is None or not self._resident:
+            return True
+        from vidur.scheduler.execution_plan_builder import RequestState
+
+        view = AdmissionView(
+            tuple(RequestState.from_request(r) for r in self._resident.values()),
+            tuple(
+                (RequestState.from_request(r), n) for r, n in zip(requests, num_tokens)
+            ),
+            RequestState.from_request(request),
+            next_num_tokens,
+            self._config.batch_size_cap,
+            self._max_micro_batch_size,
+            self._num_stages,
+            self._request_generator_config.max_tokens,
+            self.probe,
+        )
+        return bool(self._admission.admit(view))
 
     def on_native_plan_complete(self, key, time, plan=None, completion=None):
         from vidur.events.batch_stage_end_event import BatchStageEndEvent
@@ -214,6 +291,7 @@ class BaseReplicaScheduler(ABC):
         )
 
     def _reserve_native_memory(self, request, next_num_tokens):
+        self._resident[request.id] = request
         if self._memory_manager is not None:
             self._memory_manager.grow(
                 request.id, self._native_memory_demand(request, next_num_tokens)
@@ -258,6 +336,7 @@ class BaseReplicaScheduler(ABC):
 
     def free(self, *request_ids: int) -> None:
         for request_id in request_ids:
+            self._resident.pop(request_id, None)
             if self._memory_manager is not None:
                 self._memory_manager.free(request_id)
             num_blocks = self._allocation_map.pop(request_id)

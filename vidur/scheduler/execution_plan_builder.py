@@ -132,6 +132,21 @@ class BoundCost:
             raise ValueError("bound costs require provenance and granularity")
 
 
+@dataclass(frozen=True)
+class PlanProbe:
+    """A policy's estimate of one plan run alone; observation, never accounting.
+
+    `makespan_seconds`: submission to completion of the isolated plan.
+    `busy_seconds`: the sum of its activity costs. `critical_path_seconds`:
+    seconds on its critical path per resource label, as the policy names them.
+    An isolated-plan estimate, not the realized step time under contention.
+    """
+
+    makespan_seconds: float
+    busy_seconds: float
+    critical_path_seconds: tuple[tuple[str, float], ...] = ()
+
+
 class ArchitecturePolicy(Protocol):
     def declare(self, work: SelectedWork) -> PlanDeclaration: ...
 

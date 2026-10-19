@@ -99,6 +99,9 @@ class VLLMReplicaScheduler(BaseReplicaScheduler):
             if len(requests) == self._max_micro_batch_size:
                 break
 
+            if not self._admits(request, next_num_tokens, requests, num_tokens):
+                break
+
             request = self._request_queue.pop(0)
 
             self._allocate_request(request, next_num_tokens)

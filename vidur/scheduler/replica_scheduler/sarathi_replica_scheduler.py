@@ -181,6 +181,11 @@ class SarathiReplicaScheduler(BaseReplicaScheduler):
             if not self._can_allocate_request(self._request_queue[0], next_num_tokens):
                 break
 
+            if not self._admits(
+                self._request_queue[0], next_num_tokens, requests, num_tokens
+            ):
+                break
+
             request = self._request_queue.pop(0)
 
             self._allocate_request(request, next_num_tokens)
